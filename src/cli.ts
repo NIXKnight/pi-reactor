@@ -43,6 +43,7 @@ const USAGE = `pi-reactor — self-hosted agent event loop
     sink    ls | add <name> --kind telegram --chat-id <n> | rm <name>
     trigger ls | add <id> --schedule <cron> --agent <a> --task <t> | rm <id>
     <kind>  edit <name> [same flags]   Change only the flags you pass
+            --clear-extensions       agent edit: empty the extension allowlist
     secret  set <name> <field>   Read a credential from stdin (never echoed)
     Add --dry-run to any write to see the before/after without applying it.
 
@@ -426,6 +427,12 @@ function currentEntry(
  * `--extension` replaces the list rather than appending: an edit that could only
  * grow it would have no way to remove one, and repeating the flag already
  * expresses the full set.
+ *
+ * Emptying it needs a flag of its own. Absence already means "leave this alone"
+ * — that is what makes every other flag safe to omit — so it cannot also mean
+ * "make it empty" without `agent edit news --model x` silently unloading the
+ * extensions. That leaves the empty allowlist unreachable from the CLI while
+ * the daemon accepts it, which is the drift this file exists to avoid.
  */
 function mergeEntry(
 	kind: "agent" | "sink" | "trigger",
@@ -445,7 +452,17 @@ function mergeEntry(
 		set(next, "maxDuration", flag("max-duration"));
 		set(next, "thinkingLevel", flag("thinking-level"));
 		const extensions = args.repeated["extension"];
-		if (extensions && extensions.length > 0) next.extensions = extensions;
+		if (args.flags["clear-extensions"] === true) {
+			if (extensions && extensions.length > 0) {
+				fail("--clear-extensions contradicts --extension; pass one or the other");
+			}
+			// Drop the key rather than writing `[]`: that is the entry `agent add`
+			// with no --extension produces, and one spelling per state keeps the
+			// before/after readable.
+			delete next.extensions;
+		} else if (extensions && extensions.length > 0) {
+			next.extensions = extensions;
+		}
 		return next;
 	}
 

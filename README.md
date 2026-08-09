@@ -327,6 +327,7 @@ schedule ls | resume <id>    Cron watermarks and breaker state
 agent   ls | add <name> --cwd <dir> --model <p/m> | rm <name>
 sink    ls | add <name> --kind telegram --chat-id <n> | rm <name>
 trigger ls | add <id> --schedule <cron> --agent <a> --task <t> | rm <id>
+<kind>  edit <name> [same flags]   Change only the flags you pass
 secret  set <name> <field>   Read a credential from stdin, never echoed
 
 serve options:

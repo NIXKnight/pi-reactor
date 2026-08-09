@@ -134,6 +134,17 @@ published. Prefer the `npm:` form for the ones that are: a path like
 where that package keeps its entry file, and neither is a promise anyone made you. When
 one of them moves, the agent stops starting — at 09:00.
 
+Changing it later replaces the whole set: `agent edit <name> --extension a --extension b`
+*is* the new allowlist, not two more entries. Emptying it has its own flag — a provider pi
+resolves natively needs no extension at all:
+
+```bash
+pi-reactor agent edit <name> --model <native-provider>/<model> --clear-extensions
+```
+
+Omitting `--extension` cannot mean that, because it already means "leave the allowlist
+alone" — which is what makes every other flag safe to leave off.
+
 Read the agent back afterwards. `agent ls` is the only place the allowlist is visible,
 and an empty one on a machine whose provider comes from an extension means the first
 scheduled run will fail.

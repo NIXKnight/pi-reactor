@@ -124,6 +124,50 @@ test("edit changes only what is passed, and leaves the rest alone", async () => 
 	}
 });
 
+test("edit can empty the extension allowlist, which repeating --extension cannot say", async () => {
+	// Omitting --extension means "leave it alone", so an empty allowlist had no
+	// spelling at all: the daemon accepts that state and `agent add` produces it,
+	// but the CLI could not reach it. The case is switching to a provider pi
+	// resolves natively, which leaves the old registrar loaded with no way to drop it.
+	const f = fixture();
+	try {
+		await withDaemon(f, async () => {
+			await f.cli("agent", "add", "news", "--cwd", f.workspace, "--model", "prov/m", "--extension", "/ext/a.ts");
+			await f.cli("agent", "edit", "news", "--model", "native/m", "--clear-extensions");
+
+			const [agent] = JSON.parse(await f.cli("agent", "ls")) as {
+				provider: string;
+				modelId: string;
+				extensions: string[];
+			}[];
+			assert.deepEqual(agent!.extensions, [], "the allowlist is empty, so the runner passes -ne and no -e");
+			assert.equal(`${agent!.provider}/${agent!.modelId}`, "native/m", "the model change in the same command still landed");
+		});
+	} finally {
+		f.cleanup();
+	}
+});
+
+test("--clear-extensions with --extension is refused rather than silently resolved", async () => {
+	// Either winner would be a guess at which half of a contradictory command the
+	// operator meant, and the losing half is invisible until the next scheduled run.
+	const f = fixture();
+	try {
+		await withDaemon(f, async () => {
+			await f.cli("agent", "add", "news", "--cwd", f.workspace, "--model", "prov/m", "--extension", "/ext/a.ts");
+			await assert.rejects(
+				() => f.cli("agent", "edit", "news", "--clear-extensions", "--extension", "/ext/b.ts"),
+				/contradicts/,
+			);
+
+			const [agent] = JSON.parse(await f.cli("agent", "ls")) as { extensions: string[] }[];
+			assert.deepEqual(agent!.extensions, ["/ext/a.ts"], "a refused command wrote nothing");
+		});
+	} finally {
+		f.cleanup();
+	}
+});
+
 test("edit refuses a name that is not there", async () => {
 	const f = fixture();
 	try {
