@@ -114,6 +114,13 @@ grows at every step: provider credential present → working tree clean (opt-in 
 `SIGKILL`, each with its own grace window. Unattended systems need an upper bound; a
 runaway job would otherwise hold a slot and spend until the daily cap noticed.
 
+**Every run starts empty.** A job gets a fresh Pi session and the trigger's task text;
+nothing carries over from the run before it. That is deliberate — a transcript that grew
+for a year would cost more every day and eventually stop fitting. What persists is the
+agent's working directory. Pi reads `AGENTS.md` from there into the system prompt on every
+run, batch runs included, and the agent's own tools reach the rest of it. So a recurring
+job that needs to know what it did yesterday keeps that in a file, not in a session.
+
 **A verdict always reaches you.** The notification is committed in the same database
 transaction as the run record, so once a job concludes the message *will* be delivered —
 even if the agent was SIGKILLed, even if the daemon died mid-run and came back. Delivery

@@ -106,6 +106,13 @@ pi-reactor trigger add <id> --schedule "0 9 * * *" --timezone Asia/Shanghai \
   --agent <name> --task "…" --notify tg --dry-run     # inspect, then drop --dry-run
 ```
 
+**Point `--cwd` at a directory that persists.** It is the only thing an agent keeps: every
+run is a fresh pi session, so nothing carries over from yesterday's. pi reads `AGENTS.md`
+from that directory into the system prompt on every run — batch runs included, `-ne` does
+not affect it — and the agent's `read`/`write` tools reach everything else in it. A
+recurring task that has to know what it did last time therefore keeps that in files there.
+A temp path means it starts from nothing every time.
+
 **Never put a secret on a command line** — it lands in shell history and in every `ps` on
 the machine. `pi-reactor secret set <name> <field>` reads from stdin:
 
