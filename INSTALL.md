@@ -162,6 +162,11 @@ pi-reactor runs                                     # outcome and token count
 Confirm the notification actually arrived. A run that succeeds and a message that lands
 are two different claims.
 
+`doctor` asks pi which models the agent's own allowlist exposes, so a mistyped model id is
+caught here rather than at 09:00. Read the result precisely: it can only contradict a
+provider that publishes a catalog. A built-in such as `anthropic` appears in no listing at
+all, so its line says "not checked" — that is silence, not a blessing.
+
 ## Things that will bite you
 
 - **pi has no web tool.** Its tools are `bash`, `edit`, `find`, `grep`, `ls`, `read`,

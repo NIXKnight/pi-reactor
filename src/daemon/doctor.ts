@@ -16,6 +16,7 @@ import { resolveProviderCredential, resolveSinkCredential } from "../core/creden
 import { openDb, userVersion } from "../core/db.ts";
 import { MIGRATIONS } from "../core/migrations.ts";
 import { buildJobEnv, findLeakedSecrets } from "./job-env.ts";
+import { readModelCatalog, judgeModel, type ModelCatalog } from "./model-catalog.ts";
 import { providerNames } from "../webhook/provider.ts";
 import "../webhook/provider-github.ts";
 import { readLock } from "./lock.ts";
@@ -137,6 +138,11 @@ export async function runDoctor(paths: Paths): Promise<Check[]> {
 			note: "the daemon runs, but has nothing to run; add one with /reactor in pi, or `pi-reactor agent add`",
 		});
 	}
+	// One `pi --list-models` per distinct (cwd, allowlist). The answer depends on
+	// both — pi resolves settings per directory, and the allowlist decides which
+	// providers register at all — so agents sharing them share the subprocess.
+	const catalogs = new Map<string, ModelCatalog | undefined>();
+
 	for (const agent of Object.values(config.agents)) {
 		const cwdOk = existsSync(agent.cwd) && statSync(agent.cwd).isDirectory();
 		checks.push({
@@ -173,6 +179,26 @@ export async function runDoctor(paths: Paths): Promise<Check[]> {
 				fix: `missing: ${missing.join(", ")}`,
 			});
 		}
+
+		// Asked under this agent's own allowlist, because that is the pi the job
+		// gets. A missing cwd cannot host the subprocess, and the check above has
+		// already said so, so this reports "not checked" rather than a second failure.
+		const catalogKey = JSON.stringify([agent.cwd, agent.extensions]);
+		if (cwdOk && !catalogs.has(catalogKey)) {
+			catalogs.set(catalogKey, await readModelCatalog({ cwd: agent.cwd, extensions: agent.extensions }));
+		}
+		const verdict = judgeModel(
+			cwdOk ? catalogs.get(catalogKey) : undefined,
+			agent.provider,
+			agent.modelId,
+			agent.extensions,
+		);
+		checks.push({
+			ok: verdict.ok,
+			label: `agent "${agent.name}": model "${agent.provider}/${agent.modelId}"`,
+			...(verdict.note ? { note: verdict.note } : {}),
+			...(verdict.fix ? { fix: verdict.fix } : {}),
+		});
 
 		// Turns "sink credentials never reach the agent" from a comment into a fact
 		// about this configuration: the allowlist blocks the host environment, but
