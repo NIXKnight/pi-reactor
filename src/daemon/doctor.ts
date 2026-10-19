@@ -6,10 +6,9 @@
  * command rather than by reading logs. Runs entirely without a daemon, so it
  * works before the first `serve` and after a crash alike.
  */
-import { existsSync, statSync, accessSync, constants, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, statSync, accessSync, constants } from "node:fs";
 import { connect } from "node:net";
-import { resolveRpcEntry } from "./agent-runner.ts";
+import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 import type { Paths } from "../core/paths.ts";
 import { loadConfig, loadWebhooks, ConfigError, type Config } from "../core/config.ts";
 import { resolveProviderCredential, resolveSinkCredential } from "../core/credentials.ts";
@@ -41,7 +40,7 @@ export interface Check {
  * The upper bound is real, though: the RPC protocol carries no semver promise,
  * so compatibility is asserted only for the minor the contract tests cover.
  */
-const SUPPORTED_PI_MINOR = "0.82";
+const SUPPORTED_PI_MINOR = "1.3";
 const SUPPORTED_PI_RANGE = `${SUPPORTED_PI_MINOR}.x`;
 
 /**
@@ -65,7 +64,7 @@ export function isLocalExtension(spec: string): boolean {
 }
 
 export function piVersionSupported(version: string): boolean {
-	// The full x.y.z shape is required: "0.82" is not a release, and matching it
+	// The full x.y.z shape is required: "1.3" is not a release, and matching it
 	// would let a truncated or unread version pass as supported.
 	return /^(\d+\.\d+)\.\d+/.exec(version)?.[1] === SUPPORTED_PI_MINOR;
 }
@@ -138,9 +137,10 @@ export async function runDoctor(paths: Paths): Promise<Check[]> {
 			note: "the daemon runs, but has nothing to run; add one with /reactor in pi, or `pi-reactor agent add`",
 		});
 	}
-	// One `pi --list-models` per distinct (cwd, allowlist). The answer depends on
-	// both — pi resolves settings per directory, and the allowlist decides which
-	// providers register at all — so agents sharing them share the subprocess.
+	// One public RPC model query per distinct (cwd, allowlist, job environment).
+	// The answer depends on all three: pi resolves settings per directory,
+	// selected extensions register providers, and only configured providers are
+	// returned by get_available_models.
 	const catalogs = new Map<string, ModelCatalog | undefined>();
 
 	for (const agent of Object.values(config.agents)) {
@@ -180,12 +180,26 @@ export async function runDoctor(paths: Paths): Promise<Check[]> {
 			});
 		}
 
-		// Asked under this agent's own allowlist, because that is the pi the job
-		// gets. A missing cwd cannot host the subprocess, and the check above has
-		// already said so, so this reports "not checked" rather than a second failure.
-		const catalogKey = JSON.stringify([agent.cwd, agent.extensions]);
+		// Asked through the public RPC entry under the exact environment and selected
+		// extension allowlist a job receives. A missing cwd cannot host the
+		// subprocess, and the check above already says so, so this reports "not
+		// checked" rather than a second failure.
+		const jobEnv = buildJobEnv({
+			agent,
+			jobId: 0,
+			socketPath: paths.sock,
+			providerVars: credential?.vars ?? {},
+		});
+		// Include the profile name rather than serializing environment values: two
+		// agents may give extensions different non-secret settings, while credential
+		// values must never become cache keys or diagnostics.
+		const catalogKey = JSON.stringify([agent.name, agent.cwd, agent.extensions]);
 		if (cwdOk && !catalogs.has(catalogKey)) {
-			catalogs.set(catalogKey, await readModelCatalog({ cwd: agent.cwd, extensions: agent.extensions }));
+			catalogs.set(catalogKey, await readModelCatalog({
+				cwd: agent.cwd,
+				extensions: agent.extensions,
+				env: jobEnv,
+			}));
 		}
 		const verdict = judgeModel(
 			cwdOk ? catalogs.get(catalogKey) : undefined,
@@ -203,9 +217,7 @@ export async function runDoctor(paths: Paths): Promise<Check[]> {
 		// Turns "sink credentials never reach the agent" from a comment into a fact
 		// about this configuration: the allowlist blocks the host environment, but
 		// an agent's own `env` block could still hand one over by hand.
-		const leaked = findLeakedSecrets(
-			buildJobEnv({ agent, jobId: 0, socketPath: paths.sock, providerVars: credential?.vars ?? {} }),
-		);
+		const leaked = findLeakedSecrets(jobEnv);
 		if (leaked.length > 0) {
 			checks.push({
 				ok: false,
@@ -281,33 +293,15 @@ export async function runDoctor(paths: Paths): Promise<Check[]> {
 	return checks;
 }
 
-/**
- * Reads the resolved pi version.
- *
- * Cannot `require("@earendil-works/pi-coding-agent/package.json")`: that subpath
- * is not in the package's exports map (the third time this bit us, after
- * `/compat` and `/rpc-entry`). Instead resolve the one subpath that IS exported
- * and walk up from dist/ to the package root.
- */
-function piVersionCheck(): Check {
-	try {
-		const packageRoot = dirname(dirname(resolveRpcEntry()));
-		const pkg = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as { version?: string };
-		const version = pkg.version ?? "unknown";
-		return {
-			ok: piVersionSupported(version),
-			label: `pi ${version} is supported (${SUPPORTED_PI_RANGE})`,
-			fix:
-				`the RPC protocol carries no semver promise across minors, and nothing has tested this one. ` +
-				`Install a supported release, or run \`npm run test:contract\` against it and widen the range if it passes.`,
-		};
-	} catch (err) {
-		return {
-			ok: false,
-			label: "pi coding agent resolvable",
-			fix: `install it: ${errorSummary(err)}`,
-		};
-	}
+/** Reads the version through pi's supported root export, never package layout. */
+export function piVersionCheck(): Check {
+	return {
+		ok: piVersionSupported(PI_VERSION),
+		label: `pi ${PI_VERSION} is supported (${SUPPORTED_PI_RANGE})`,
+		fix:
+			`the RPC protocol carries no semver promise across minors, and nothing has tested this one. ` +
+			`Install a supported release, or run \`npm run test:contract\` against it and widen the range if it passes.`,
+	};
 }
 
 /**

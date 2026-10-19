@@ -126,7 +126,7 @@ function conventionEnvKeys(provider: string, env: NodeJS.ProcessEnv): string[] {
 }
 
 /**
- * Measured against pi-ai 0.82.1 on 2026-07-26:
+ * Verified against the pinned public pi-ai 1.3.0 compatibility export:
  *  - findEnvKeys("anthropic", {API_KEY, OAUTH_TOKEN}) returns
  *    ["...OAUTH_TOKEN", "...API_KEY"], confirming the silent-override risk;
  *  - an unknown provider (anything registered by an extension, such as sub2api)
@@ -141,8 +141,16 @@ export async function loadFindEnvKeys(): Promise<FindEnvKeys> {
 	if (cachedFindEnvKeys) return cachedFindEnvKeys;
 	let upstream: FindEnvKeys | undefined;
 	try {
-		const mod = (await import("@earendil-works/pi-ai/compat")) as { findEnvKeys?: FindEnvKeys };
-		if (typeof mod.findEnvKeys === "function") upstream = mod.findEnvKeys;
+		const mod: typeof import("@earendil-works/pi-ai/compat") = await import("@earendil-works/pi-ai/compat");
+		if (typeof mod.findEnvKeys === "function") {
+			upstream = (provider, env) => {
+				const definedEnv: Record<string, string> = {};
+				for (const [name, value] of Object.entries(env)) {
+					if (value !== undefined) definedEnv[name] = value;
+				}
+				return mod.findEnvKeys(provider, definedEnv);
+			};
+		}
 	} catch {
 		// Upstream unavailable: fall back to the convention entirely.
 	}

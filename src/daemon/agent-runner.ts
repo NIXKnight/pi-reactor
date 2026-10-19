@@ -7,7 +7,7 @@
  *. Protocol semantics mirror it; the contract test still
  * anchors on upstream.
  *
- * Six hard constraints, each established by running against 0.82.1:
+ * Six hard constraints, verified against the pinned public 1.3.0 contract:
  *  1. Completion is `agent_settled` ONLY. `agent_end` can be followed by a retry
  *     or continuation, and `prompt`'s response is just a preflight ack.
  *  2. Frames must be split on LF only. Upstream dropped readline because U+2028
@@ -17,8 +17,8 @@
  *  4. The last assistant text must be cached as events arrive. After SIGKILL the
  *     RPC channel is gone and `get_last_assistant_text` is unavailable, so this
  *     cache is the only source for a failure notification body.
- *  5. `get_last_assistant_text` returns `data:{}` when there is no text — `text`
- *     is undefined, not null.
+ *  5. An empty `get_last_assistant_text` has no usable string (the 1.3.0
+ *     declaration says null while its published RPC runtime omits `text`).
  *  6. A dialog opened during `session_start` deadlocks RPC unconditionally
  *     (rpc-mode.js binds the stdin reader after rebindSession), so no
  *     auto-answer policy can rescue it; the only defence is `-ne` plus a probe.
@@ -26,6 +26,11 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
+import type {
+	RpcCommand,
+	RpcExtensionUIRequest,
+	RpcExtensionUIResponse,
+} from "@earendil-works/pi-coding-agent";
 import type { AgentProfile } from "../core/config.ts";
 import type { Logger } from "./logger.ts";
 import { errorSummary } from "./logger.ts";
@@ -129,6 +134,14 @@ interface ExitStatus {
 	signal: NodeJS.Signals | null;
 }
 
+const FIRE_AND_FORGET_UI_METHODS = new Set<RpcExtensionUIRequest["method"]>([
+	"notify",
+	"setStatus",
+	"setWidget",
+	"setTitle",
+	"set_editor_text",
+]);
+
 export async function runAgent(options: RunAgentOptions): Promise<RunResult> {
 	const startupProbeMs = options.startupProbeMs ?? DEFAULTS.startupProbeMs;
 	const abortGraceMs = options.abortGraceMs ?? DEFAULTS.abortGraceMs;
@@ -205,11 +218,14 @@ export async function runAgent(options: RunAgentOptions): Promise<RunResult> {
 		//    confirm resolves false, select/input resolve undefined, so the
 		//    extension sees "user cancelled" and does not crash.
 		if (frame.type === "extension_ui_request" && typeof frame.id === "string") {
-			const fireAndForget = frame.method === "notify" || frame.method === "setStatus"
-				|| frame.method === "setWidget" || frame.method === "setTitle"
-				|| frame.method === "set_editor_text";
-			if (!fireAndForget) {
-				send({ type: "extension_ui_response", id: frame.id, cancelled: true });
+			const request = frame as RpcExtensionUIRequest;
+			if (!FIRE_AND_FORGET_UI_METHODS.has(request.method)) {
+				const response = {
+					type: "extension_ui_response",
+					id: request.id,
+					cancelled: true,
+				} satisfies RpcExtensionUIResponse;
+				send(response);
 			}
 			return;
 		}
@@ -241,7 +257,11 @@ export async function runAgent(options: RunAgentOptions): Promise<RunResult> {
 		if (child.stdin?.writable) child.stdin.write(`${JSON.stringify(payload)}\n`);
 	}
 
-	function call(type: string, fields: Record<string, unknown> = {}, timeoutMs = 15_000): Promise<Frame> {
+	function call<T extends RpcCommand["type"]>(
+		type: T,
+		fields: Omit<Extract<RpcCommand, { type: T }>, "id" | "type">,
+		timeoutMs = 15_000,
+	): Promise<Frame> {
 		const id = `r${++nextId}`;
 		return new Promise<Frame>((resolve, reject) => {
 			const timer = setTimeout(() => {
@@ -253,7 +273,8 @@ export async function runAgent(options: RunAgentOptions): Promise<RunResult> {
 				clearTimeout(timer);
 				resolve(frame);
 			});
-			send({ id, type, ...fields });
+			const command = { id, type, ...fields } as RpcCommand;
+			send(command);
 		});
 	}
 
