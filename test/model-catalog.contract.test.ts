@@ -1,23 +1,13 @@
-/**
- * Pins the two upstream facts the model check rests on, against the PUBLISHED
- * build the lockfile resolves — today `@earendil-works/pi-coding-agent@0.82.1`.
- *
- * The check parses a table meant for humans, so its shape is a contract nobody
- * wrote down. And its whole premise is that `--list-models` answers differently
- * under a different allowlist; if that ever stopped being true the check would
- * pass for configurations that cannot start, which is worse than not having it.
- *
- * Run before widening the supported range in doctor.ts, and after any `npm
- * update` that moves pi. The allowlist case needs a provider extension on the
- * machine; without one it SKIPs and says so rather than pretending to pass.
- *   PROVIDER_EXTENSION=npm:pi-sub2api PROVIDER=sub2api node --test test/model-catalog.contract.test.ts
- */
+/** Verifies model listing through pi 1.3.0's exported RPC entry and commands. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readModelCatalog } from "../src/daemon/model-catalog.ts";
+import { buildJobEnv } from "../src/daemon/job-env.ts";
+import { resolveProviderCredential } from "../src/core/credentials.ts";
+import type { AgentProfile } from "../src/core/config.ts";
 
 const PROVIDER = process.env.PROVIDER ?? "sub2api";
 const PROVIDER_EXTENSION = process.env.PROVIDER_EXTENSION;
@@ -26,66 +16,86 @@ function tmpCwd(): string {
 	return mkdtempSync(join(tmpdir(), "pi-reactor-catalog-"));
 }
 
-test("contract: --list-models still prints a table this parser recognises", async () => {
+function catalogEnv(cwd: string, providerVars: Record<string, string> = {}): Record<string, string> {
+	const agent: AgentProfile = {
+		name: "catalog",
+		cwd,
+		provider: PROVIDER,
+		modelId: process.env.MODEL ?? "unused",
+		extensions: [],
+		env: {},
+		maxDurationS: 60,
+	};
+	return buildJobEnv({
+		agent,
+		jobId: 0,
+		socketPath: join(cwd, "daemon.sock"),
+		providerVars,
+		hostEnv: { PATH: process.env.PATH, HOME: cwd },
+	});
+}
+
+test("contract: get_available_models lists through public rpc-entry without a prompt", async () => {
 	const cwd = tmpCwd();
 	try {
-		const catalog = await readModelCatalog({ cwd, extensions: [], timeoutMs: 60_000 });
-
-		assert.ok(catalog, "pi ran and exited 0");
-		assert.ok(catalog.size > 0, "a machine with no catalog at all would make this check permanently silent");
-
-		for (const [provider, ids] of catalog) {
-			assert.doesNotMatch(provider, /\s/, "provider names are one whitespace-free token");
-			assert.notEqual(provider, "provider", "the header row was consumed, not parsed as data");
-			assert.ok(ids.size > 0, `${provider} has at least one model`);
-			for (const id of ids) assert.doesNotMatch(id, /\s/, `${provider}/${id}`);
-		}
+		const catalog = await readModelCatalog({
+			cwd,
+			extensions: [],
+			env: catalogEnv(cwd),
+			timeoutMs: 60_000,
+		});
+		assert.ok(catalog, "the public RPC child answered and exited cleanly");
+		assert.ok(catalog instanceof Map);
+		// With no credential the current public contract returns an empty available
+		// list. That is a valid answer, not a reason to consult package internals.
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });
 	}
 });
 
-test("contract: the allowlist decides which providers register", async (t) => {
-	// The premise of asking pi under the profile's own flags. A provider an
-	// extension registers is invisible to `-ne` alone, which is exactly the state
-	// a batch job runs in — so a check that consulted the ambient pi would bless a
-	// configuration that dies at startup with `Unknown provider`.
+test("contract: selected provider extensions affect the RPC model list", async (t) => {
 	if (!PROVIDER_EXTENSION) {
-		t.diagnostic("SKIP: set PROVIDER_EXTENSION (and PROVIDER) to a provider extension on this machine");
+		t.skip("set PROVIDER_EXTENSION (and PROVIDER) to a provider extension on this machine");
 		return;
 	}
 	const cwd = tmpCwd();
 	try {
-		const withExt = await readModelCatalog({ cwd, extensions: [PROVIDER_EXTENSION], timeoutMs: 60_000 });
-		const without = await readModelCatalog({ cwd, extensions: [], timeoutMs: 60_000 });
-
-		assert.ok(withExt?.has(PROVIDER), `${PROVIDER} registers when ${PROVIDER_EXTENSION} is allowlisted`);
-		assert.equal(without?.has(PROVIDER), false, `and is invisible without it — the reason the check passes the allowlist`);
+		const credential = await resolveProviderCredential(PROVIDER, {
+			credentialsFile: join(cwd, "credentials.json"),
+		});
+		if (!credential) {
+			t.skip(`no credential for provider=${PROVIDER}; available-model assertion is gated`);
+			return;
+		}
+		const withExt = await readModelCatalog({
+			cwd,
+			extensions: [PROVIDER_EXTENSION],
+			env: catalogEnv(cwd, credential.vars),
+			timeoutMs: 60_000,
+		});
+		const without = await readModelCatalog({
+			cwd,
+			extensions: [],
+			env: catalogEnv(cwd, credential.vars),
+			timeoutMs: 60_000,
+		});
+		assert.ok(withExt?.has(PROVIDER), `${PROVIDER} registers when the selected extension is loaded`);
+		assert.equal(without?.has(PROVIDER), false, "the provider is absent without that selected extension");
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });
 	}
 });
 
-test("contract: an unloadable allowlist entry does not fail the listing", async () => {
-	// Measured, against the guess that preceded it: pi exits 0 with an empty
-	// stderr and lists the rest. So a broken -e never reaches judgeModel as
-	// "oracle failed" — the provider it would have registered is simply absent,
-	// which judgeModel treats as no evidence and passes over in silence.
-	//
-	// That is the right division of labour rather than a gap: doctor already
-	// reports a missing extension PATH on its own line, and reporting one fault
-	// twice is how a report stops being read. If this ever starts exiting
-	// non-zero, readModelCatalog returns undefined and the check goes quiet for
-	// every provider on that agent — still no false failure, but worth knowing.
+test("contract: an unloadable selected extension fails closed", async () => {
 	const cwd = tmpCwd();
 	try {
 		const catalog = await readModelCatalog({
 			cwd,
 			extensions: [join(cwd, "definitely-not-here.ts")],
+			env: catalogEnv(cwd),
 			timeoutMs: 60_000,
 		});
-		assert.ok(catalog, "a broken allowlist entry is ignored, not fatal");
-		assert.ok(catalog.size > 0, "and the providers that did load are still listed");
+		assert.equal(catalog, undefined, "doctor must not claim model evidence from a failed selected-only startup");
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });
 	}

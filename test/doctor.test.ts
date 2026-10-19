@@ -9,22 +9,26 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { piVersionSupported, isLocalExtension } from "../src/daemon/doctor.ts";
+import { piVersionCheck, piVersionSupported, isLocalExtension } from "../src/daemon/doctor.ts";
 
-test("support is asserted for a minor, not for a point", () => {
-	assert.ok(piVersionSupported("0.82.0"));
-	assert.ok(piVersionSupported("0.82.1"), "the patch installs actually resolve");
-	assert.ok(piVersionSupported("0.82.17"), "and every later one, which is what a range means");
+test("support is asserted for the proven 1.3 release line", () => {
+	assert.ok(piVersionSupported("1.3.0"));
+	assert.ok(piVersionSupported("1.3.17"), "the peer range allows proven-line patches");
 
-	// Not caution for its own sake: the RPC protocol carries no semver promise
-	// across minors, and the contract tests reach exactly one of them.
-	assert.equal(piVersionSupported("0.83.0"), false);
-	assert.equal(piVersionSupported("0.81.9"), false);
-	assert.equal(piVersionSupported("1.0.0"), false);
+	// The RPC protocol carries no semver promise across minors.
+	assert.equal(piVersionSupported("1.4.0"), false);
+	assert.equal(piVersionSupported("1.2.9"), false);
+	assert.equal(piVersionSupported("2.0.0"), false);
+});
+
+test("doctor reports VERSION from pi's public root export", () => {
+	const check = piVersionCheck();
+	assert.equal(check.ok, true);
+	assert.match(check.label, /^pi 1\.3\.0 is supported \(1\.3\.x\)$/);
 });
 
 test("a version that cannot be read is not quietly treated as supported", () => {
-	for (const v of ["unknown", "", "0.82", "x.y.z"]) assert.equal(piVersionSupported(v), false, JSON.stringify(v));
+	for (const v of ["unknown", "", "1.3", "x.y.z"]) assert.equal(piVersionSupported(v), false, JSON.stringify(v));
 });
 
 test("only extensions named by path are ours to check for", () => {

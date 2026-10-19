@@ -1,6 +1,6 @@
 /**
  * Verifies every RPC contract we depend on against the PUBLISHED build the
- * lockfile resolves — today `@earendil-works/pi-coding-agent@0.82.1`.
+ * lockfile resolves — `@earendil-works/pi-coding-agent@1.3.0`.
  *
  * This is the upgrade gate: run it before widening the supported range in
  * doctor.ts, and after any `npm update` that moves pi. A failure means upstream
@@ -16,7 +16,8 @@ import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveRpcEntry, runAgent } from "../src/daemon/agent-runner.ts";
 import { buildJobEnv } from "../src/daemon/job-env.ts";
 import { createLogger } from "../src/daemon/logger.ts";
@@ -132,18 +133,42 @@ const MINIMAL_ENV = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? ""
 
 // ------------------------------------------------------------ T1/T2/T7 lifecycle
 
-test("contract T1: starts on a minimal {PATH,HOME} env; stdin end exits 0", async () => {
+test("contract T1: current public RPC commands work under the job environment allowlist", async () => {
 	const dir = tmpCwd();
+	let p: Probe | undefined;
 	try {
-		const p = probe(["-ne"], join(dir, "work"), MINIMAL_ENV);
+		const agent = agentFor(join(dir, "work"), []);
+		const env = buildJobEnv({
+			agent,
+			jobId: 1,
+			socketPath: join(dir, "daemon.sock"),
+			providerVars: {},
+			hostEnv: { PATH: process.env.PATH, HOME: dir, UNLISTED_VALUE: "must-not-pass" },
+		});
+		assert.equal(env.UNLISTED_VALUE, undefined);
+
+		p = probe(["-ne"], join(dir, "work"), env);
 		const st = await p.call("get_state");
 		assert.equal(st.success, true);
 		const data = st.data as Record<string, unknown>;
 		assert.equal(typeof data.sessionId, "string");
 		assert.equal(data.isStreaming, false);
+
+		const models = await p.call("get_available_models");
+		assert.equal(models.success, true);
+		assert.ok(Array.isArray((models.data as Record<string, unknown>).models));
+		const last = await p.call("get_last_assistant_text");
+		assert.equal(last.success, true);
+		const lastText = (last.data as Record<string, unknown>).text;
+		assert.ok(lastText === null || lastText === undefined,
+			"an empty session has no last assistant text (the 1.3.0 runtime omits it)");
+
 		p.endStdin();
 		assert.equal((await p.exited).code, 0, "closing stdin is the graceful exit path");
-	} finally { rmSync(dir, { recursive: true, force: true }); }
+	} finally {
+		p?.kill("SIGKILL");
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("contract T2: SIGTERM yields exit code 143, the anchor of the termination chain", async () => {
@@ -217,15 +242,45 @@ test("contract T5b: a dialog after startup answers normally, and cancel has a sa
 	} finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("contract T5c: the -ne path loads no discovered extensions", async () => {
+test("contract T5c: selected extensions keep order; discovered extensions and Operator console stay out", async () => {
 	const dir = tmpCwd();
 	try {
-		const withNe = probe(["-ne"], join(dir, "work"), MINIMAL_ENV);
-		await withNe.call("get_state");
-		withNe.endStdin();
-		await withNe.exited;
-		// Only assert the -ne path is clean: whether global extensions exist depends on the machine.
-		assert.ok(true, "buildArgs always adds -ne; see job-env.test.ts");
+		const agentDir = join(dir, "agent");
+		const discoveredDir = join(agentDir, "extensions");
+		mkdirSync(discoveredDir, { recursive: true });
+		const selectedFirst = join(dir, "selected-first.ts");
+		const selectedSecond = join(dir, "selected-second.ts");
+		writeFileSync(selectedFirst,
+			`export default pi => pi.registerCommand("selected-first", {description:"first", handler(){}});\n`);
+		writeFileSync(selectedSecond,
+			`export default pi => pi.registerCommand("selected-second", {description:"second", handler(){}});\n`);
+		writeFileSync(join(discoveredDir, "discovered.ts"),
+			`export default pi => pi.registerCommand("discovered", {description:"must stay out", handler(){}});\n`);
+		// This discovered wrapper is the actual Operator extension. If -ne regresses,
+		// /reactor appears in get_commands and the assertion below fails.
+		const operatorExtension = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "extension", "index.ts");
+		writeFileSync(join(discoveredDir, "reactor.ts"),
+			`import reactor from ${JSON.stringify(pathToFileURL(operatorExtension).href)};\n` +
+			`export default pi => { pi.registerCommand("operator-wrapper-loaded", {description:"marker", handler(){}}); reactor(pi); };\n`);
+
+		const agent = agentFor(join(dir, "work"), [selectedSecond, selectedFirst]);
+		const env = buildJobEnv({
+			agent,
+			jobId: 1,
+			socketPath: join(dir, "daemon.sock"),
+			providerVars: {},
+			hostEnv: { PATH: process.env.PATH, HOME: dir, PI_CODING_AGENT_DIR: agentDir },
+		});
+		const p = probe(["-ne", "-e", selectedSecond, "-e", selectedFirst], agent.cwd, env);
+		await p.call("get_state");
+		const response = await p.call("get_commands");
+		const commands = ((response.data as Record<string, unknown>).commands as Array<{ name: string }>).map((c) => c.name);
+		assert.deepEqual(commands.filter((name) => name.startsWith("selected-")), ["selected-second", "selected-first"]);
+		assert.equal(commands.includes("discovered"), false);
+		assert.equal(commands.includes("operator-wrapper-loaded"), false);
+		assert.equal(commands.includes("reactor"), false, "the Operator console is never discovered into unattended jobs");
+		p.endStdin();
+		assert.equal((await p.exited).code, 0);
 	} finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -238,9 +293,13 @@ test("contract T3: full agent-runner round trip (protocol always; content needs 
 		const cred = await resolveProviderCredential(agent.provider, {
 			credentialsFile: join(dir, "credentials.json"),
 		});
+		if (!cred) {
+			t.skip(`no credential for provider=${PROVIDER}; provider-dependent round trip is gated`);
+			return;
+		}
 		const env = buildJobEnv({
 			agent, jobId: 1, socketPath: join(dir, "daemon.sock"),
-			providerVars: cred?.vars ?? {},
+			providerVars: cred.vars,
 		});
 		const result = await runAgent({
 			agent, task: "Reply with exactly: PONG", env,
@@ -254,12 +313,8 @@ test("contract T3: full agent-runner round trip (protocol always; content needs 
 		assert.ok(result.pid && result.pid > 0);
 		assert.equal(result.timedOut, false);
 
-		// Content level.
-		if (!cred || result.lastText === null) {
-			t.diagnostic(`SKIP content level: provider=${PROVIDER} produced no text (stopReason=${result.stopReason}, tokens=${result.usage.total})`);
-			return;
-		}
-		assert.match(result.lastText, /PONG/);
+		// Content level (the whole case is credential-gated above).
+		assert.match(result.lastText ?? "", /PONG/);
 		assert.ok(result.usage.total > 0, `usage should be populated, got ${JSON.stringify(result.usage)}`);
 		assert.equal(classify(result).outcome, "succeeded");
 		assert.ok(result.sessionFile, "session_file must be captured: the reaper uses it to delete only our own sessions");
@@ -294,7 +349,7 @@ test("contract T4: maxDuration drives the termination chain to failed + reason:t
 	try {
 		const agent = agentFor(join(dir, "work"));
 		const cred = await resolveProviderCredential(agent.provider, { credentialsFile: join(dir, "credentials.json") });
-		if (!cred) { t.diagnostic("SKIP: no provider credential, cannot produce an interruptible stream"); return; }
+		if (!cred) { t.skip("no provider credential; cannot produce an interruptible stream"); return; }
 
 		const env = buildJobEnv({ agent, jobId: 2, socketPath: join(dir, "daemon.sock"), providerVars: cred.vars });
 		const result = await runAgent({
