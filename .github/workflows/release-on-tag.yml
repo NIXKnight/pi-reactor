@@ -1,9 +1,4 @@
-name: Publish to npm
-
-# Releasing is `npm version <patch|minor|major> && git push --follow-tags`.
-# Everything below is verification: the tag, the package version and the
-# repository metadata all have to agree before anything is published, because
-# npm provenance signs a claim about which repository built the tarball.
+name: Release to GitHub
 
 on:
   push:
@@ -12,107 +7,219 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to release (e.g. v0.1.6)"
+        description: "Existing tag to release (for example, v0.2.4)"
         required: true
         type: string
 
+# Checkout needs read access; creating or updating the release needs write access.
 permissions:
-  id-token: write
   contents: write
 
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
-  publish:
+  release:
     runs-on: ubuntu-latest
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - name: Checkout the selected tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: refs/tags/${{ env.RELEASE_TAG }}
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Verify tag, commit, version, and package metadata
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          EXPECTED_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Release tag must be a version tag such as v0.2.4"
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = "push" ] && [ "$EVENT_REF" != "refs/tags/$RELEASE_TAG" ]; then
+            echo "Push event ref does not match the selected release tag"
+            exit 1
+          fi
+          if ! git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
+            echo "Selected ref is not an existing tag"
+            exit 1
+          fi
+
+          tag_commit=$(git rev-list -n 1 "refs/tags/$RELEASE_TAG")
+          head_commit=$(git rev-parse HEAD)
+          if [ "$head_commit" != "$tag_commit" ]; then
+            echo "Checked-out commit does not match the selected tag"
+            exit 1
+          fi
+
+          node <<'NODE'
+          const fs = require("node:fs");
+          const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          const lock = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));
+          const expectedTag = `v${pkg.version}`;
+          const expectedRepository = process.env.EXPECTED_REPOSITORY;
+          const repository = pkg.repository?.url
+            ?.replace(/^git\+/, "")
+            .replace(/\.git$/, "")
+            .replace(/^https:\/\/github\.com\//, "");
+
+          if (process.env.RELEASE_TAG !== expectedTag) {
+            throw new Error(`tag ${process.env.RELEASE_TAG} does not exactly match package version ${pkg.version}`);
+          }
+          if (lock.version !== pkg.version || lock.packages?.[""]?.version !== pkg.version) {
+            throw new Error("package-lock.json version does not match package.json");
+          }
+          if (pkg.private !== true) {
+            throw new Error("package.json must remain private to block registry publication");
+          }
+          if (pkg.name !== "pi-reactor" || pkg.bin?.["pi-reactor"] !== "./dist/cli.js") {
+            throw new Error("package or CLI name changed unexpectedly");
+          }
+          if (repository !== expectedRepository) {
+            throw new Error(`package repository ${repository} does not match ${expectedRepository}`);
+          }
+          NODE
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: "24"
-          registry-url: "https://registry.npmjs.org"
           cache: npm
 
       - name: Install dependencies
         run: npm ci
 
-      # The contract suite is deliberately excluded: it spawns a real Pi, which
-      # is not installed here, and the RPC protocol it pins carries no semver
-      # promise. Run it locally before trusting a new Pi release.
-      - name: Verify the tree is releasable
+      - name: Run checks
         run: npm run check
 
-      - name: Build
+      - name: Build distributable files
         run: npm run build
 
-      - name: Upgrade npm for OIDC support
-        run: |
-          npm install -g npm@latest
-          npm_version=$(npm --version)
-          echo "npm version: $npm_version"
-          node -e "const v='$npm_version'.split('.').map(Number); if (v[0] < 11 || (v[0] === 11 && v[1] < 5) || (v[0] === 11 && v[1] === 5 && v[2] < 1)) { throw new Error('npm >= 11.5.1 is required for trusted publishing'); }"
+      # Credential-free contract cases always run. Cases that require a provider
+      # credential identify themselves as skipped when no credential is configured.
+      - name: Run Pi contract tests
+        run: npm run test:contract
 
-      - name: Verify OIDC token availability
+      - name: Pack and inspect the native package archive
+        id: package
         run: |
-          if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL}" ] && [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" ]; then
-            echo "OIDC token available"
-          else
-            echo "OIDC token NOT available"
-            echo "Check workflow permissions include 'id-token: write'"
+          set -euo pipefail
+
+          package_version=$(node -p "require('./package.json').version")
+          expected_name="pi-reactor-${package_version}.tgz"
+          asset_dir="$RUNNER_TEMP/release-assets"
+          pack_result="$RUNNER_TEMP/npm-pack.json"
+          extract_dir=$(mktemp -d)
+          smoke_prefix=$(mktemp -d)
+          trap 'rm -rf "$extract_dir" "$smoke_prefix"' EXIT
+
+          rm -rf "$asset_dir"
+          mkdir -p "$asset_dir"
+          npm pack --json --pack-destination "$asset_dir" > "$pack_result"
+
+          archive_name=$(node - "$pack_result" <<'NODE'
+          const fs = require("node:fs");
+          const result = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+          if (!Array.isArray(result) || result.length !== 1 || typeof result[0]?.filename !== "string") {
+            throw new Error("npm pack did not report exactly one archive");
+          }
+          process.stdout.write(result[0].filename);
+          NODE
+          )
+          if [ "$archive_name" != "$expected_name" ]; then
+            echo "Expected archive $expected_name but npm pack produced $archive_name"
             exit 1
           fi
 
-      - name: Verify version matches tag
-        run: |
-          tag_version="${RELEASE_TAG#v}"
-          pkg_version=$(node -e "console.log(require('./package.json').version)")
-          echo "Tag version:     $tag_version"
-          echo "Package version: $pkg_version"
-          if [ "$tag_version" != "$pkg_version" ]; then
-            echo "Version mismatch! Tag says $tag_version but package.json says $pkg_version"
-            exit 1
-          fi
+          archive="$asset_dir/$archive_name"
+          [ -f "$archive" ]
+          [ "$(find "$asset_dir" -maxdepth 1 -type f -name '*.tgz' | wc -l)" -eq 1 ]
 
-      - name: Verify trusted publisher repository metadata
+          tar -xzf "$archive" -C "$extract_dir"
+          for required in \
+            package/package.json \
+            package/dist/cli.js \
+            package/dist/core/config.js \
+            package/dist/daemon/serve.js \
+            package/dist/extension/index.js \
+            package/skills/operate-pi-reactor/SKILL.md \
+            package/INSTALL.md
+          do
+            if [ ! -f "$extract_dir/$required" ]; then
+              echo "Required archive entry is missing: $required"
+              exit 1
+            fi
+          done
+
+          node - "$extract_dir/package/package.json" "$package_version" <<'NODE'
+          const fs = require("node:fs");
+          const pkg = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+          if (pkg.name !== "pi-reactor" || pkg.version !== process.argv[3]) {
+            throw new Error("packed package identity is incorrect");
+          }
+          if (pkg.bin?.["pi-reactor"] !== "./dist/cli.js") {
+            throw new Error("packed CLI mapping is incorrect");
+          }
+          NODE
+
+          npm install --global --prefix "$smoke_prefix" "$archive"
+          "$smoke_prefix/bin/pi-reactor" --help | grep -F "pi-reactor — self-hosted agent event loop"
+
+          (
+            cd "$asset_dir"
+            sha256sum "$archive_name" > "$archive_name.sha256"
+            sha256sum --check "$archive_name.sha256"
+          )
+
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          echo "archive_name=$archive_name" >> "$GITHUB_OUTPUT"
+          echo "checksum=$asset_dir/$archive_name.sha256" >> "$GITHUB_OUTPUT"
+          echo "checksum_name=$archive_name.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update GitHub Release
         env:
-          GITHUB_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+          CHECKSUM: ${{ steps.package.outputs.checksum }}
         run: |
-          pkg_repo=$(node -e "const repo=require('./package.json').repository?.url || ''; console.log(repo.replace(/^git\\+/, '').replace(/\\.git$/, '').replace(/^https:\\/\\/github\\.com\\//, ''))")
-          echo "GitHub repository: $GITHUB_REPOSITORY"
-          echo "package.json repo:  $pkg_repo"
-          if [ "$pkg_repo" != "$GITHUB_REPOSITORY" ]; then
-            echo "package.json repository.url must match GitHub repository for npm provenance"
-            exit 1
+          set -euo pipefail
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$ARCHIVE" "$CHECKSUM" \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+          else
+            gh release create "$RELEASE_TAG" "$ARCHIVE" "$CHECKSUM" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --generate-notes \
+              --title "$RELEASE_TAG"
           fi
 
-      - name: Publish to npm
-        run: npm publish --access public --tag latest --provenance
+          assets=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          for required in \
+            "${{ steps.package.outputs.archive_name }}" \
+            "${{ steps.package.outputs.checksum_name }}"
+          do
+            if [ "$(printf '%s\n' "$assets" | grep -Fxc "$required")" -ne 1 ]; then
+              echo "Release asset is missing or ambiguous: $required"
+              exit 1
+            fi
+          done
 
-      - name: Create release tarball
+      - name: Write release summary
         run: |
-          npm pack
-          mkdir -p extract-tmp
-          tar -xzf pi-reactor-*.tgz -C extract-tmp
-          mv extract-tmp/package pi-reactor
-          tar -czf pi-reactor.tar.gz pi-reactor
-          rm -rf extract-tmp pi-reactor pi-reactor-*.tgz
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          generate_release_notes: true
-          files: pi-reactor.tar.gz
-
-      - name: Publish summary
-        if: success()
-        run: |
-          PKG_VERSION=$(node -e "console.log(require('./package.json').version)")
-          echo "Published: pi-reactor@$PKG_VERSION"
-          echo "https://www.npmjs.com/package/pi-reactor"
+          {
+            echo "### GitHub Release $RELEASE_TAG"
+            echo
+            echo "- ${{ steps.package.outputs.archive_name }}"
+            echo "- ${{ steps.package.outputs.checksum_name }}"
+          } >> "$GITHUB_STEP_SUMMARY"

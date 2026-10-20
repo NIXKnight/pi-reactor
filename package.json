@@ -1,6 +1,7 @@
 {
   "name": "pi-reactor",
-  "version": "0.2.3",
+  "version": "0.2.4",
+  "private": true,
   "description": "Self-hosted agent event loop for the pi coding agent: cron and webhook triggers, a durable queue with spend caps, and outbound notifications to Telegram/Slack.",
   "keywords": [
     "pi-package",
@@ -19,10 +20,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/pacoyang/pi-reactor.git"
+    "url": "git+https://github.com/NIXKnight/pi-reactor.git"
   },
-  "homepage": "https://github.com/pacoyang/pi-reactor#readme",
-  "bugs": "https://github.com/pacoyang/pi-reactor/issues",
+  "homepage": "https://github.com/NIXKnight/pi-reactor#readme",
+  "bugs": "https://github.com/NIXKnight/pi-reactor/issues",
   "type": "module",
   "engines": {
     "node": ">=22.19.0"

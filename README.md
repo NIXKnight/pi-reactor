@@ -1,8 +1,8 @@
 # pi-reactor
 
-[![npm](https://img.shields.io/npm/v/pi-reactor?style=flat-square)](https://www.npmjs.com/package/pi-reactor)
-[![node](https://img.shields.io/node/v/pi-reactor?style=flat-square)](https://nodejs.org)
-[![license](https://img.shields.io/npm/l/pi-reactor?style=flat-square)](LICENSE)
+[![GitHub Release](https://img.shields.io/github/v/release/NIXKnight/pi-reactor?style=flat-square)](https://github.com/NIXKnight/pi-reactor/releases/latest)
+[![node](https://img.shields.io/badge/node-%3E%3D22.19.0-339933?style=flat-square&logo=node.js)](https://nodejs.org)
+[![license](https://img.shields.io/github/license/NIXKnight/pi-reactor?style=flat-square)](LICENSE)
 
 **Scheduled and event-driven work for the [Pi coding agent](https://github.com/earendil-works/pi).**
 
@@ -42,10 +42,18 @@ cron · webhook · CLI  ──►  queue · gates · spawn pi  ──►  Telegr
 
 ## Install
 
+Releases are native npm package archives attached to GitHub Releases. Install the
+version-pinned archive globally, then register that installed package directory with Pi:
+
 ```bash
-npm install -g pi-reactor    # the CLI and the daemon
-pi install npm:pi-reactor    # the /reactor extension and its skill, inside your Pi
+npm install --global "https://github.com/NIXKnight/pi-reactor/releases/download/v0.2.4/pi-reactor-0.2.4.tgz"
+pi install "$(npm root --global)/pi-reactor"
 ```
+
+The matching `pi-reactor-0.2.4.tgz.sha256` asset can be downloaded from the
+[v0.2.4 release](https://github.com/NIXKnight/pi-reactor/releases/tag/v0.2.4) when an
+out-of-band checksum check is required. The package is distributed from GitHub Releases,
+not a package registry.
 
 Requires Node 22.19+ and a Pi install the daemon can spawn.
 
@@ -349,7 +357,8 @@ it.
 
 ## Pi Extension
 
-The other way to drive it. `pi install npm:pi-reactor` adds a `/reactor` command, six
+The other way to drive it. Registering the globally installed package with
+`pi install "$(npm root --global)/pi-reactor"` adds a `/reactor` command, six
 `reactor_*` tools, and a skill that teaches the model how to use them. It runs inside your own interactive Pi and talks
 to the daemon over its socket, so it works from any Pi session on the machine — whatever
 directory you happen to be in.
@@ -529,11 +538,11 @@ starts, and a paused queue comes back paused.
 npm test              # unit and integration; no network, no model calls
 npm run test:contract # spawns real Pi, pinned to the verified version
 npm run check         # typecheck + test
-npm run build         # emit dist/ — only needed to publish
+npm run build         # emit dist/ — only needed to package a release
 ```
 
 Development needs no build: Node strips types from the sources directly, and the tests
-run them as they are. Publishing does need one, because Node refuses to strip types under
+run them as they are. Packaging does need one, because Node refuses to strip types under
 `node_modules` and no flag overrides it — an installed package has to ship JavaScript or
 its CLI cannot start. `rewriteRelativeImportExtensions` is what lets one source tree serve
 both: imports are written `./paths.ts` so Node runs them in place, and rewritten to
