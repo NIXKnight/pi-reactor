@@ -43,14 +43,21 @@ conflicts.
 
 ## 2. Install
 
+Install the version-pinned native package archive from its GitHub Release, then register
+the resulting global package directory with Pi:
+
 ```bash
-npm install -g pi-reactor    # the CLI and the daemon
-pi install npm:pi-reactor    # the /reactor extension and its skill, inside pi
+npm install --global "https://github.com/NIXKnight/pi-reactor/releases/download/v0.2.4/pi-reactor-0.2.4.tgz"
+pi install "$(npm root --global)/pi-reactor"
 pi-reactor doctor            # expect failures here; it lists what is still missing
 ```
 
-Both halves, or `/reactor` is missing from the pi you are standing in and `doctor` ends up
-suggesting a command that was never installed.
+The release also carries `pi-reactor-0.2.4.tgz.sha256` for an out-of-band checksum check.
+Do not replace the versioned URL with an unpinned latest-release URL. Distribution is
+through GitHub Release assets rather than a package registry.
+
+Both halves are required: otherwise `/reactor` is missing from the Pi you are standing in
+and `doctor` ends up suggesting a command that was never installed.
 
 ## 3. Ask before configuring
 
