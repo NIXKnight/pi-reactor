@@ -1,6 +1,6 @@
 /**
  * Verifies every RPC contract we depend on against the PUBLISHED build the
- * lockfile resolves — `@earendil-works/pi-coding-agent@1.3.0`.
+ * lockfile resolves — `@earendil-works/pi-coding-agent@1.6.0`.
  *
  * This is the upgrade gate: run it before widening the supported range in
  * doctor.ts, and after any `npm update` that moves pi. A failure means upstream
@@ -161,7 +161,7 @@ test("contract T1: current public RPC commands work under the job environment al
 		assert.equal(last.success, true);
 		const lastText = (last.data as Record<string, unknown>).text;
 		assert.ok(lastText === null || lastText === undefined,
-			"an empty session has no last assistant text (the 1.3.0 runtime omits it)");
+			"an empty session has no last assistant text (the 1.6.0 runtime omits it)");
 
 		p.endStdin();
 		assert.equal((await p.exited).code, 0, "closing stdin is the graceful exit path");

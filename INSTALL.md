@@ -13,7 +13,7 @@ Report what you find before making changes. Each of these has bitten a real inst
 
 ```bash
 node -v                              # >= 22.19 is a hard requirement, not a preference
-command -v pi && pi --version        # pi is the engine; without it nothing runs
+command -v pi && pi --version        # pi is the engine; this release requires 1.6.x
 ls ~/.pi/agent/                      # auth.json, settings.json, telegram.json may exist
 ls ~/.pi-reactor/                    # already installed? do not overwrite a working setup
 systemctl is-system-running          # and whether `systemctl --user` works at all
@@ -47,17 +47,14 @@ Install the version-pinned native package archive from its GitHub Release, then 
 the resulting global package directory with Pi:
 
 ```bash
-npm install --global "https://github.com/NIXKnight/pi-reactor/releases/download/v0.2.4/pi-reactor-0.2.4.tgz"
+npm install --global "https://github.com/NIXKnight/pi-reactor/releases/download/v0.2.5/pi-reactor-0.2.5.tgz"
 pi install "$(npm root --global)/pi-reactor"
 pi-reactor doctor            # expect failures here; it lists what is still missing
 ```
 
-The release also carries `pi-reactor-0.2.4.tgz.sha256` for an out-of-band checksum check.
-Do not replace the versioned URL with an unpinned latest-release URL. Distribution is
-through GitHub Release assets rather than a package registry.
+The release also carries `pi-reactor-0.2.5.tgz.sha256` for an out-of-band checksum check. Do not replace the versioned URL with an unpinned latest-release URL. Distribution is through GitHub Release assets rather than a package registry.
 
-Both halves are required: otherwise `/reactor` is missing from the Pi you are standing in
-and `doctor` ends up suggesting a command that was never installed.
+Both halves are required: otherwise `/reactor` is missing from the Pi you are standing in and `doctor` ends up suggesting a command that was never installed. This pi-reactor release supports only the contract-tested Pi 1.6.x line.
 
 ## 3. Ask before configuring
 
@@ -128,6 +125,8 @@ pi-reactor secret set tg botToken < /path/to/a/file      # or a pipe, never an a
 ```
 
 Do not print a token you read, either. Pipe it.
+
+For a provider key stored in Pi's own `~/.pi/agent/auth.json`, create a reusable unattended API-key entry with `pi auth login <provider> --api-key`. Do not rely on the command's default browser or subscription OAuth flow for this fallback: pi-reactor deliberately accepts only `api_key` entries from `auth.json` because an unattended daemon cannot refresh an interactive login safely.
 
 **If the provider is registered by a pi extension** rather than built in, name that
 extension on the agent. Batch jobs run with `-ne`, so nothing is loaded that was not

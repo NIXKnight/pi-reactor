@@ -38,9 +38,9 @@ export interface Check {
  * that every other release is broken, which is a claim nothing has tested.
  *
  * The upper bound is real, though: the RPC protocol carries no semver promise,
- * so compatibility is asserted only for the minor the contract tests cover.
+ * so compatibility is asserted only for the pinned minor the contract tests cover.
  */
-const SUPPORTED_PI_MINOR = "1.3";
+const SUPPORTED_PI_MINOR = "1.6";
 const SUPPORTED_PI_RANGE = `${SUPPORTED_PI_MINOR}.x`;
 
 /**
@@ -64,7 +64,7 @@ export function isLocalExtension(spec: string): boolean {
 }
 
 export function piVersionSupported(version: string): boolean {
-	// The full x.y.z shape is required: "1.3" is not a release, and matching it
+	// The full x.y.z shape is required: "1.6" is not a release, and matching it
 	// would let a truncated or unread version pass as supported.
 	return /^(\d+\.\d+)\.\d+/.exec(version)?.[1] === SUPPORTED_PI_MINOR;
 }
@@ -160,7 +160,8 @@ export async function runDoctor(paths: Paths): Promise<Check[]> {
 			...(credential ? { note: `from ${credential.source}` } : {}),
 			fix:
 				`add it to ${paths.credentialsFile} under "provider:${agent.provider}", ` +
-				`or set the provider's API key in the daemon environment, or run \`pi login\``,
+				`or set the provider's API key in the daemon environment, or run ` +
+				`\`pi auth login ${agent.provider} --api-key\``,
 		});
 
 		// A provider registered by an extension needs that extension allowlisted,
@@ -299,8 +300,8 @@ export function piVersionCheck(): Check {
 		ok: piVersionSupported(PI_VERSION),
 		label: `pi ${PI_VERSION} is supported (${SUPPORTED_PI_RANGE})`,
 		fix:
-			`the RPC protocol carries no semver promise across minors, and nothing has tested this one. ` +
-			`Install a supported release, or run \`npm run test:contract\` against it and widen the range if it passes.`,
+			`this release is pinned to the contract-tested ${SUPPORTED_PI_RANGE} line because Pi's RPC protocol ` +
+			`has no semver promise across minors; install a supported Pi release`,
 	};
 }
 

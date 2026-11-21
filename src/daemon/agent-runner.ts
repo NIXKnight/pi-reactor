@@ -7,7 +7,7 @@
  *. Protocol semantics mirror it; the contract test still
  * anchors on upstream.
  *
- * Six hard constraints, verified against the pinned public 1.3.0 contract:
+ * Six hard constraints, verified against the pinned public 1.6.0 contract:
  *  1. Completion is `agent_settled` ONLY. `agent_end` can be followed by a retry
  *     or continuation, and `prompt`'s response is just a preflight ack.
  *  2. Frames must be split on LF only. Upstream dropped readline because U+2028
@@ -17,7 +17,7 @@
  *  4. The last assistant text must be cached as events arrive. After SIGKILL the
  *     RPC channel is gone and `get_last_assistant_text` is unavailable, so this
  *     cache is the only source for a failure notification body.
- *  5. An empty `get_last_assistant_text` has no usable string (the 1.3.0
+ *  5. An empty `get_last_assistant_text` has no usable string (the 1.6.0
  *     declaration says null while its published RPC runtime omits `text`).
  *  6. A dialog opened during `session_start` deadlocks RPC unconditionally
  *     (rpc-mode.js binds the stdin reader after rebindSession), so no

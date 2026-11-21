@@ -12,7 +12,7 @@
  *   1. $CREDENTIALS_DIRECTORY/<name>   systemd LoadCredential, opt-in
  *   2. credentials.json                the default path
  *   3. process.env[<NAME>]             the development and tmux path
- *   4. ~/.pi/agent/auth.json           providers only: the user likely ran `pi login`
+ *   4. ~/.pi/agent/auth.json           providers only: `pi auth login <provider> --api-key`
  */
 import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
@@ -126,7 +126,7 @@ function conventionEnvKeys(provider: string, env: NodeJS.ProcessEnv): string[] {
 }
 
 /**
- * Verified against the pinned public pi-ai 1.3.0 compatibility export:
+ * Verified against the pinned public pi-ai 1.6.0 compatibility export:
  *  - findEnvKeys("anthropic", {API_KEY, OAUTH_TOKEN}) returns
  *    ["...OAUTH_TOKEN", "...API_KEY"], confirming the silent-override risk;
  *  - an unknown provider (anything registered by an extension, such as sub2api)
@@ -249,7 +249,7 @@ export async function resolveProviderCredential(
 		if (Object.keys(vars).length > 0) return { vars, source: "env" };
 	}
 
-	// 4. the host's pi login
+	// 4. the host's reusable Pi API-key login
 	return providerFromPiAuth(provider, primary, {
 		env,
 		...(options.agentDir !== undefined ? { agentDir: options.agentDir } : {}),

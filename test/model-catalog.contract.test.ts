@@ -1,4 +1,4 @@
-/** Verifies model listing through pi 1.3.0's exported RPC entry and commands. */
+/** Verifies model listing through pi 1.6.0's exported RPC entry and commands. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";

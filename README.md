@@ -46,16 +46,13 @@ Releases are native npm package archives attached to GitHub Releases. Install th
 version-pinned archive globally, then register that installed package directory with Pi:
 
 ```bash
-npm install --global "https://github.com/NIXKnight/pi-reactor/releases/download/v0.2.4/pi-reactor-0.2.4.tgz"
+npm install --global "https://github.com/NIXKnight/pi-reactor/releases/download/v0.2.5/pi-reactor-0.2.5.tgz"
 pi install "$(npm root --global)/pi-reactor"
 ```
 
-The matching `pi-reactor-0.2.4.tgz.sha256` asset can be downloaded from the
-[v0.2.4 release](https://github.com/NIXKnight/pi-reactor/releases/tag/v0.2.4) when an
-out-of-band checksum check is required. The package is distributed from GitHub Releases,
-not a package registry.
+The matching `pi-reactor-0.2.5.tgz.sha256` asset can be downloaded from the [v0.2.5 release](https://github.com/NIXKnight/pi-reactor/releases/tag/v0.2.5) when an out-of-band checksum check is required. The package is distributed from GitHub Releases, not a package registry.
 
-Requires Node 22.19+ and a Pi install the daemon can spawn.
+Requires Node 22.19+ and Pi 1.6.x; the daemon and extension contracts are pinned to that tested release line.
 
 Setting this up on a server, or letting an agent do it for you?
 [INSTALL.md](INSTALL.md) is written for an agent to read: what to check before touching the machine, what to ask
@@ -314,11 +311,7 @@ atomically, applied without a restart — so validation exists in exactly one pl
 extension cannot drift from the CLI. Hand-editing works too; run `pi-reactor reload`
 afterwards, and a bad edit is rejected while the previous configuration stays live.
 
-**Credentials never enter a config file.** They live in `credentials.json` at 0600, which
-is why the other files can be committed, shared when asking for help, and displayed in
-full by the confirmation dialog. Values are read from `$CREDENTIALS_DIRECTORY` (systemd
-`LoadCredential=`), then `credentials.json`, then the environment; provider keys fall back
-to your own `~/.pi/agent/auth.json`, so `pi login` is usually all the setup there is.
+**Credentials never enter a config file.** They live in `credentials.json` at 0600, which is why the other files can be committed, shared when asking for help, and displayed in full by the confirmation dialog. Values are read from `$CREDENTIALS_DIRECTORY` (systemd `LoadCredential=`), then `credentials.json`, then the environment; provider API keys fall back to your own `~/.pi/agent/auth.json`. Create a reusable unattended entry with `pi auth login <provider> --api-key`; browser or subscription OAuth entries in `auth.json` are not used by the daemon.
 
 ## CLI
 
@@ -536,18 +529,12 @@ starts, and a paused queue comes back paused.
 
 ```bash
 npm test              # unit and integration; no network, no model calls
-npm run test:contract # spawns real Pi, pinned to the verified version
+npm run test:contract # spawns real Pi, pinned to the verified 1.6.0 contract
 npm run check         # typecheck + test
 npm run build         # emit dist/ — only needed to package a release
 ```
 
-Development needs no build: Node strips types from the sources directly, and the tests
-run them as they are. Packaging does need one, because Node refuses to strip types under
-`node_modules` and no flag overrides it — an installed package has to ship JavaScript or
-its CLI cannot start. `rewriteRelativeImportExtensions` is what lets one source tree serve
-both: imports are written `./paths.ts` so Node runs them in place, and rewritten to
-`./paths.js` on the way out. The contract tests are the upgrade gate:
-the RPC protocol carries no semver promise, so run them before trusting a new Pi release.
+Development needs no build: Node strips types from the sources directly, and the tests run them as they are. Packaging does need one, because Node refuses to strip types under `node_modules` and no flag overrides it — an installed package has to ship JavaScript or its CLI cannot start. `rewriteRelativeImportExtensions` is what lets one source tree serve both: imports are written `./paths.ts` so Node runs them in place, and rewritten to `./paths.js` on the way out. Development dependencies pin Pi 1.6.0 and the published peers permit only 1.6.x; the contract tests are the upgrade gate because Pi's RPC protocol carries no semver promise across minors.
 
 ## License
 

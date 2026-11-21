@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to release (for example, v0.2.4)"
+        description: "Existing tag to release (for example, v0.2.5)"
         required: true
         type: string
 
@@ -41,7 +41,7 @@ jobs:
           set -euo pipefail
 
           if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
-            echo "Release tag must be a version tag such as v0.2.4"
+            echo "Release tag must be a version tag such as v0.2.5"
             exit 1
           fi
           if [ "$EVENT_NAME" = "push" ] && [ "$EVENT_REF" != "refs/tags/$RELEASE_TAG" ]; then

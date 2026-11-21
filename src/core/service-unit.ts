@@ -150,7 +150,7 @@ function renderSystemd(scope: ServiceScope, input: ServiceUnitInput): string {
 	if (input.reactorDir) environment.push(`Environment=PI_REACTOR_DIR=${input.reactorDir}`);
 
 	// A system unit inherits no HOME, and the daemon needs one: its own directory
-	// lives under it, and so does the pi login the agent spends. Naming the account
+	// lives under it, and so does the Pi API-key login the agent spends. Naming the account
 	// explicitly also covers generating with sudo for someone other than root.
 	const identity =
 		scope === "system"

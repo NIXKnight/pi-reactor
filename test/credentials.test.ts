@@ -91,7 +91,7 @@ test("provider: the environment tier carries every variable pi would consult", a
 	}
 });
 
-test("provider: falls back to the host's pi login, api_key entries only", async () => {
+test("provider: falls back to the host's reusable Pi API-key login, api_key entries only", async () => {
 	const ws = workspace();
 	try {
 		const agentDir = join(ws.root, "pi-agent");
